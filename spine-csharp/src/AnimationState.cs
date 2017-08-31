@@ -36,7 +36,7 @@ using System.Text;
 namespace Spine {
 	public class AnimationState {
 		private AnimationStateData data;
-		private ExposedList<TrackEntry> tracks = new ExposedList<TrackEntry>();
+		private readonly ExposedList<TrackEntry> tracks = new ExposedList<TrackEntry>();
 		private ExposedList<Event> events = new ExposedList<Event>();
 		private float timeScale = 1;
 
@@ -57,6 +57,26 @@ namespace Spine {
 			if (data == null) throw new ArgumentNullException("data cannot be null.");
 			this.data = data;
 		}
+
+		#region Extra Settings
+		/// <summary>
+		/// Determines when events from a previous animation continue to be captured. </summary>
+		/// <remarks>The default 0.5f means events will stop being captured and raised halfway through crossfade duration. 0 means ignore all. 1 means capture all.</remarks>
+		public float mixEventThreshold = 0.5f;
+
+		/// <summary>
+		/// If true, animations will not inherit the side-effects of previous animations.</summary>
+		/// <remarks>Default is true, because it's the whole point of this version of Spine.AnimationState</remarks>
+		public bool removePreviousAnimation = true;
+		#endregion
+
+		#region Resetters
+		// A list to hold animations that were removed from the track via interrupting an ongoing mix. Not necessary, but a bit cleaner with it.
+		readonly Queue<Animation> animationsToRemove = new Queue<Animation>();
+
+		// For non-mixing reset.
+		bool resetOnNextApply = false;
+		#endregion
 
 		public void Update (float delta) {
 			delta *= timeScale;
@@ -94,6 +114,14 @@ namespace Spine {
 
 		public void Apply (Skeleton skeleton) {
 			ExposedList<Event> events = this.events;
+			if (resetOnNextApply) {
+				// Do this naive thing for now.
+				skeleton.SetToSetupPose();
+			}
+
+			// Reset stuff
+			while (animationsToRemove.Count > 0)
+				animationsToRemove.Dequeue().SetKeyedItemsToSetupPose(skeleton);
 
 			for (int i = 0; i < tracks.Count; i++) {
 				TrackEntry current = tracks.Items[i];
@@ -112,17 +140,32 @@ namespace Spine {
 					else
 						current.animation.Mix(skeleton, current.lastTime, time, loop, events, current.mix);
 				} else {
-					float previousTime = previous.time;
-					if (!previous.loop && previousTime > previous.endTime) previousTime = previous.endTime;
-					previous.animation.Apply(skeleton, previous.lastTime, previousTime, previous.loop, null);
-					// Remove the line above, and uncomment the line below, to allow previous animations to fire events during mixing.
-					//previous.animation.Apply(skeleton, previous.lastTime, previousTime, previous.loop, events);
-					previous.lastTime = previousTime;
-
 					float alpha = current.mixTime / current.mixDuration * current.mix;
+
 					if (alpha >= 1) {
 						alpha = 1;
 						current.previous = null;
+						if (removePreviousAnimation) previous.animation.SetKeyedItemsToSetupPose(skeleton);	// Ensure it's removed.
+					} else {
+						float previousTime = previous.time;
+						if (!previous.loop && previousTime > previous.endTime) previousTime = previous.endTime;
+						var previousAnimation = previous.animation;
+						var eventCaptureList = alpha < mixEventThreshold ? events : null;
+
+						if (removePreviousAnimation) {
+
+							// Reset stuff.
+							//  Allow the previous animation to fade out. This prevents unkeyed parts from snapping back to setup pose.
+							float previousAlpha = alpha < 0.5f ? 1f : (1f - alpha) * 2f; // Tune to your liking; just plain (1f - alpha) didn't look good.
+							previousAnimation.SetKeyedItemsToSetupPose(skeleton);	// form the basis of the Mix-With-Setup-Pose formula.
+							previousAnimation.Mix(skeleton, previous.lastTime, previousTime, previous.loop, eventCaptureList, previousAlpha);
+						} else {
+							
+							// Original hands-off behavior.
+							previousAnimation.Apply(skeleton, previous.lastTime, previousTime, previous.loop, eventCaptureList);
+						}
+
+						previous.lastTime = previousTime;
 					}
 					current.animation.Mix(skeleton, current.lastTime, time, loop, events, alpha);
 				}
@@ -173,11 +216,25 @@ namespace Spine {
 				entry.mixDuration = data.GetMix(current.animation, entry.animation);
 				if (entry.mixDuration > 0) {
 					entry.mixTime = 0;
+
 					// If a mix is in progress, mix from the closest animation.
-					if (previous != null && current.mixTime / current.mixDuration < 0.5f)
-						entry.previous = previous;
-					else
+					const float ALPHA_THRESHOLD = 0.5f;
+					if (previous != null) {
+						// Reset stuff
+						if (removePreviousAnimation) animationsToRemove.Enqueue(previous.animation);
+						
+						if (current.mixTime / current.mixDuration < ALPHA_THRESHOLD) {
+							entry.previous = previous;
+						} else {
+							entry.previous = current;
+						}
+					} else {
 						entry.previous = current;
+					}
+
+				} else {
+					// No mixing
+					resetOnNextApply |= removePreviousAnimation;
 				}
 			}
 
@@ -212,7 +269,7 @@ namespace Spine {
 		}
 
 		/// <summary>Adds an animation to be played delay seconds after the current or last queued animation.</summary>
-		/// <param name="delay">May be <= 0 to use duration of previous animation minus any mix duration plus the negative delay.</param>
+		/// <param name="delay">May be less than or equal to 0 to use duration of previous animation minus any mix duration plus the negative delay.</param>
 		public TrackEntry AddAnimation (int trackIndex, Animation animation, bool loop, float delay) {
 			if (animation == null) throw new ArgumentException("animation cannot be null.");
 			TrackEntry entry = new TrackEntry();
@@ -300,4 +357,97 @@ namespace Spine {
 			return animation == null ? "<none>" : animation.name;
 		}
 	}
-}
+
+	// These are temporary extension methods. Recommendation is to refactor them into their corresponding classes.
+	public static class SpineResetterExtensions {
+		public static void SetColorToSetupPose (this Slot slot) {
+			slot.r = slot.data.r;
+			slot.g = slot.data.g;
+			slot.b = slot.data.b;
+			slot.a = slot.data.a;
+		}
+
+		// For Spine.Animation
+		public static void SetKeyedItemsToSetupPose (this Animation animation, Skeleton skeleton) {
+			var timelinesItems = animation.timelines.Items;
+			for (int i = 0, n = timelinesItems.Length; i < n; i++) {
+				var currentTimeline = timelinesItems[i];
+				currentTimeline.SetToSetupPose(skeleton);
+			}
+		}
+
+		// For each timeline type.
+		// Timelines know how to apply themselves based on skeleton data; They should know how to reset the skeleton back to skeleton data?
+		public static void SetToSetupPose (this Timeline timeline, Skeleton skeleton) {
+			if (timeline != null) {
+				// sorted according to assumed likelihood here
+
+				// Bone stuff
+				if (timeline is RotateTimeline) {
+					var bone = skeleton.bones.Items[((RotateTimeline)timeline).boneIndex];
+					bone.rotation = bone.data.rotation;
+
+				} else if (timeline is TranslateTimeline) {
+					var bone = skeleton.bones.Items[((TranslateTimeline)timeline).boneIndex];
+					bone.x = bone.data.x;
+					bone.y = bone.data.y;
+
+				} else if (timeline is ScaleTimeline) {
+					var bone = skeleton.bones.Items[((ScaleTimeline)timeline).boneIndex];
+					bone.scaleX = bone.data.scaleX;
+					bone.scaleY = bone.data.scaleY;
+
+
+				// Attachment stuff. How do you reset FFD?
+				} else if (timeline is FFDTimeline) {
+					var ffdTimeline = (FFDTimeline)timeline;
+					var slot = skeleton.slots.Items[ffdTimeline.slotIndex];
+					var attachment = ffdTimeline.attachment;
+					if (slot.attachment != attachment) return;
+
+					slot.Attachment = attachment;
+					// Untested
+					/* See Slot.cs
+					attachment = value;
+					attachmentTime = bone.skeleton.time;
+					attachmentVerticesCount = 0;	// this causes attachment to reset.
+					*/
+
+
+
+				// Slot stuff. This is heavy to do every frame. Maybe not do it?
+				} else if (timeline is AttachmentTimeline) {
+					var slot = skeleton.slots.Items[((AttachmentTimeline)timeline).slotIndex];
+					slot.SetToSetupPose(); // also resets color. Slot.SetAttachmentToSetupPose?
+
+				} else if (timeline is ColorTimeline) {
+					var slot = skeleton.slots.Items[((ColorTimeline)timeline).slotIndex];
+					slot.SetColorToSetupPose();
+
+
+				// Flip stuff (remove in v3)
+				} else if (timeline is FlipXTimeline) {
+					var bone = skeleton.bones.Items[((FlipXTimeline)timeline).boneIndex];
+					bone.flipX = bone.data.flipX;
+
+				} else if (timeline is FlipYTimeline) {
+					var bone = skeleton.bones.Items[((FlipYTimeline)timeline).boneIndex];
+					bone.flipY = bone.data.flipY;
+
+
+				// Skeleton stuff. Skeleton.SetDrawOrderToSetupPose. This is heavy to do every frame. Maybe not do it?
+				} else if (timeline is DrawOrderTimeline) {
+					var drawOrder = skeleton.drawOrder;
+					var slotsItems = skeleton.slots.Items;
+					drawOrder.Clear();
+					for (int i = 0, n = skeleton.slots.Count; i < n; i++) {
+						drawOrder.Add(slotsItems[i]);
+					}
+
+				}
+
+			}
+		}
+	}
+
+} // namespace Spine

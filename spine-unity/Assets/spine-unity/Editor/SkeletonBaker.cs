@@ -402,7 +402,11 @@ public static class SkeletonBaker {
 
 		foreach (var o in objs) {
 			if (o is AnimationClip) {
-				clipTable.Add(o.name, (AnimationClip)o);
+			    if (clipTable.ContainsKey(o.name)) {
+			        Debug.LogError(string.Format("Key {0} already added, old == new {1}", o.name, clipTable[o.name] == o));
+			    } else {
+			        clipTable.Add(o.name, (AnimationClip)o);
+			    }
 			}
 		}
 

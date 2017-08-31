@@ -182,13 +182,26 @@ public class SkeletonUtilityBoneInspector : Editor {
 			}
 			EditorGUI.EndDisabledGroup();
 
+		}
+		GUILayout.EndHorizontal();
+
+		GUILayout.BeginHorizontal();
+		{
 			EditorGUI.BeginDisabledGroup(multiObject || !utilityBone.valid || !canCreateHingeChain);
 			{
-				if (GUILayout.Button(new GUIContent("Create Hinge Chain", SpineEditorUtilities.Icons.hingeChain), GUILayout.Width(150), GUILayout.Height(24)))
-					CreateHingeChain();
+			    if (GUILayout.Button(new GUIContent("Create Hinge Chain", SpineEditorUtilities.Icons.hingeChain), GUILayout.Width(150), GUILayout.Height(24))) {
+			        Undo.RegisterFullObjectHierarchyUndo(skeletonUtility.gameObject, "Create Hinge Chain");
+                    CreateHingeChain();
+                    Undo.RegisterFullObjectHierarchyUndo(skeletonUtility.gameObject, "Create Hinge Chain");
+			    }
+			    if (GUILayout.Button(new GUIContent("Create Hinge Chain 2D", SpineEditorUtilities.Icons.hingeChain), GUILayout.Width(175), GUILayout.Height(24))) {
+			        Undo.RegisterFullObjectHierarchyUndo(skeletonUtility.gameObject, "Create Hinge Chain 2D");
+                    CreateHingeChain2D();
+                    Undo.RegisterFullObjectHierarchyUndo(skeletonUtility.gameObject, "Create Hinge Chain 2D");
+			    }
+					
 			}
 			EditorGUI.EndDisabledGroup();
-
 		}
 		GUILayout.EndHorizontal();
 
@@ -343,5 +356,47 @@ public class SkeletonUtilityBoneInspector : Editor {
 		}
 
 		utilBone.gameObject.AddComponent<Rigidbody>();
+	}
+
+	void CreateHingeChain2D () {
+		var utilBoneArr = utilityBone.GetComponentsInChildren<SkeletonUtilityBone>();
+
+		foreach (var utilBone in utilBoneArr) {
+			AttachRigidbody2D(utilBone);
+		}
+
+		utilityBone.GetComponent<Rigidbody2D>().isKinematic = true;
+
+		foreach (var utilBone in utilBoneArr) {
+			if (utilBone == utilityBone)
+				continue;
+
+			utilBone.mode = SkeletonUtilityBone.Mode.Override;
+
+			HingeJoint2D joint = utilBone.gameObject.AddComponent<HingeJoint2D>();
+			joint.connectedBody = utilBone.transform.parent.GetComponent<Rigidbody2D>();
+			joint.useLimits = true;
+			JointAngleLimits2D limits = new JointAngleLimits2D();
+			limits.min = -20;
+			limits.max = 20;
+		    joint.limits = limits;
+			utilBone.GetComponent<Rigidbody2D>().mass = utilBone.transform.parent.GetComponent<Rigidbody2D>().mass * 0.75f;
+		}
+	}
+	
+	void AttachRigidbody2D (SkeletonUtilityBone utilBone) {
+		if (utilBone.GetComponent<Collider2D>() == null) {
+			if (utilBone.bone.Data.Length == 0) {
+				CircleCollider2D sphere = utilBone.gameObject.AddComponent<CircleCollider2D>();
+				sphere.radius = 0.1f;
+			} else {
+				float length = utilBone.bone.Data.Length;
+				BoxCollider2D box = utilBone.gameObject.AddComponent<BoxCollider2D>();
+				box.size = new Vector3(length, length / 3) * 2f;
+				box.offset = new Vector3(length / 2, 0);
+			}
+		}
+
+		utilBone.gameObject.AddComponent<Rigidbody2D>();
 	}
 }

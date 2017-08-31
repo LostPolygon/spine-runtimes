@@ -83,6 +83,31 @@ namespace Spine {
 				timelines.Items[i].Apply(skeleton, lastTime, time, events, alpha);
 		}
 
+		/// <summary>
+		/// Poses the skeleton at the specified time for this animation mixed with the current pose
+		/// Timelines with stepped curves, and timelines that do instant actions, are used without mixing.</summary>
+		/// <param name="lastTime">The last time the animation was applied.</param>
+		/// <param name="events">Any triggered events are added.</param>
+		/// <param name="alpha">The amount of this animation that affects the current pose.</param>
+		public void MixWithInstantStepped(Skeleton skeleton, float lastTime, float time, bool loop, ExposedList<Event> events, float alpha) {
+			if (skeleton == null) throw new ArgumentNullException("skeleton cannot be null.");
+
+			if (loop && duration != 0) {
+				time %= duration;
+				lastTime %= duration;
+			}
+
+			ExposedList<Timeline> timelines = this.timelines;
+			for (int i = 0, n = timelines.Count; i < n; i++) {
+				Timeline timeline = timelines.Items[i];
+				if (timeline.IsStepped(skeleton, time)) {
+					timeline.Apply(skeleton, -1, time, events, alpha);
+				} else {
+					timeline.Apply(skeleton, lastTime, time, events, alpha);
+				}
+			}
+		}
+
 		/// <param name="target">After the first and before the last entry.</param>
 		internal static int binarySearch (float[] values, float target, int step) {
 			int low = 0;
@@ -126,6 +151,8 @@ namespace Spine {
 		/// <summary>Sets the value(s) for the specified time.</summary>
 		/// <param name="events">May be null to not collect fired events.</param>
 		void Apply (Skeleton skeleton, float lastTime, float time, ExposedList<Event> events, float alpha);
+
+		bool IsStepped(Skeleton skeleton, float time);
 	}
 
 	/// <summary>Base class for frames that use an interpolation bezier curve.</summary>
@@ -141,6 +168,8 @@ namespace Spine {
 		}
 
 		abstract public void Apply (Skeleton skeleton, float lastTime, float time, ExposedList<Event> firedEvents, float alpha);
+
+		abstract public bool IsStepped(Skeleton skeleton, float time);
 
 		public void SetLinear (int frameIndex) {
 			curves[frameIndex * BEZIER_SIZE] = LINEAR;
@@ -222,7 +251,6 @@ namespace Spine {
 			: base(frameCount) {
 			frames = new float[frameCount << 1];
 		}
-
 		/// <summary>Sets the time and value of the specified keyframe.</summary>
 		public void SetFrame (int frameIndex, float time, float angle) {
 			frameIndex *= 2;
@@ -266,6 +294,17 @@ namespace Spine {
 			while (amount < -180)
 				amount += 360;
 			bone.rotation += amount * alpha;
+		}
+
+		override public bool IsStepped(Skeleton skeleton, float time) {
+			float[] frames = this.frames;
+			if (time < frames[0]) return false; // Time is before first frame.
+			if (time >= frames[frames.Length - 2]) return false; // Time is after last frame.
+				
+			// Interpolate between the previous frame and the current frame.
+			int frameIndex = Animation.binarySearch(frames, time, 2);
+
+			return GetCurveType((frameIndex >> 1) - 1) == STEPPED;
 		}
 	}
 
@@ -315,6 +354,17 @@ namespace Spine {
 
 			bone.x += (bone.data.x + prevFrameX + (frames[frameIndex + FRAME_X] - prevFrameX) * percent - bone.x) * alpha;
 			bone.y += (bone.data.y + prevFrameY + (frames[frameIndex + FRAME_Y] - prevFrameY) * percent - bone.y) * alpha;
+		}
+
+		override public bool IsStepped(Skeleton skeleton, float time) {
+			float[] frames = this.frames;
+			if (time < frames[0]) return false; // Time is before first frame.
+			if (time >= frames[frames.Length - 3]) return false; // Time is after last frame.
+
+			// Interpolate between the previous frame and the current frame.
+			int frameIndex = Animation.binarySearch(frames, time, 3);
+
+			return GetCurveType(frameIndex / 3 - 1) == STEPPED;
 		}
 	}
 
@@ -416,6 +466,16 @@ namespace Spine {
 				slot.a = a;
 			}
 		}
+
+		override public bool IsStepped(Skeleton skeleton, float time) {
+			float[] frames = this.frames;
+			if (time < frames[0]) return false; // Time is before first frame.
+			if (time >= frames[frames.Length - 5]) return false;
+
+			int frameIndex = Animation.binarySearch(frames, time, 5);
+
+			return GetCurveType(frameIndex / 5 - 1) == STEPPED;
+		}
 	}
 
 	public class AttachmentTimeline : Timeline {
@@ -453,6 +513,10 @@ namespace Spine {
 			String attachmentName = attachmentNames[frameIndex];
 			skeleton.slots.Items[slotIndex].Attachment =
 				 attachmentName == null ? null : skeleton.GetAttachment(slotIndex, attachmentName);
+		}
+
+		public bool IsStepped(Skeleton skeleton, float time) {
+			return true;
 		}
 	}
 
@@ -502,6 +566,10 @@ namespace Spine {
 			for (; frameIndex < frameCount && time >= frames[frameIndex]; frameIndex++)
 				firedEvents.Add(events[frameIndex]);
 		}
+
+		public bool IsStepped(Skeleton skeleton, float time) {
+			return true;
+		}
 	}
 
 	public class DrawOrderTimeline : Timeline {
@@ -545,6 +613,10 @@ namespace Spine {
 				for (int i = 0, n = drawOrderToSetupIndex.Length; i < n; i++)
 					drawOrder.Items[i] = slots.Items[drawOrderToSetupIndex[i]];
 			}
+		}
+
+		public bool IsStepped(Skeleton skeleton, float time) {
+			return true;
 		}
 	}
 
@@ -623,6 +695,20 @@ namespace Spine {
 				}
 			}
 		}
+
+		override public bool IsStepped(Skeleton skeleton, float time) {
+			Slot slot = skeleton.slots.Items[slotIndex];
+			if (slot.attachment != attachment) return false;
+
+			float[] frames = this.frames;
+			if (time < frames[0]) return false; // Time is before first frame.
+			if (time >= frames[frames.Length - 1]) return false; // Time is after last frame.
+
+			// Interpolate between the previous frame and the current frame.
+			int frameIndex = Animation.binarySearch(frames, time);
+
+			return GetCurveType(frameIndex - 1) == STEPPED;
+		}
 	}
 
 	public class IkConstraintTimeline : CurveTimeline {
@@ -641,6 +727,8 @@ namespace Spine {
 			: base(frameCount) {
 			frames = new float[frameCount * 3];
 		}
+
+
 
 		/** Sets the time, mix and bend direction of the specified keyframe. */
 		public void SetFrame (int frameIndex, float time, float mix, int bendDirection) {
@@ -672,6 +760,16 @@ namespace Spine {
 			float mix = prevFrameMix + (frames[frameIndex + FRAME_MIX] - prevFrameMix) * percent;
 			ikConstraint.mix += (mix - ikConstraint.mix) * alpha;
 			ikConstraint.bendDirection = (int)frames[frameIndex + PREV_FRAME_BEND_DIRECTION];
+		}
+
+		override public bool IsStepped(Skeleton skeleton, float time) {
+			float[] frames = this.frames;
+			if (time < frames[0]) return false; // Time is before first frame.
+
+			// Interpolate between the previous frame and the current frame.
+			int frameIndex = Animation.binarySearch(frames, time, 3);
+
+			return GetCurveType(frameIndex / 3 - 1) == STEPPED;
 		}
 	}
 
@@ -706,6 +804,10 @@ namespace Spine {
 			if (frames[frameIndex] < lastTime) return;
 
 			SetFlip(skeleton.bones.Items[boneIndex], frames[frameIndex + 1] != 0);
+		}
+
+		public bool IsStepped(Skeleton skeleton, float time) {
+			return true;
 		}
 
 		virtual protected void SetFlip (Bone bone, bool flip) {

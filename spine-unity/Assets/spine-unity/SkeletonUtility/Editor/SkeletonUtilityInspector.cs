@@ -116,7 +116,7 @@ public class SkeletonUtilityInspector : Editor {
 			forward *= flipRotation;
 
 			SpineEditorUtilities.Icons.boneMaterial.SetPass(0);
-			Graphics.DrawMeshNow(SpineEditorUtilities.Icons.boneMesh, Matrix4x4.TRS(vec, Quaternion.LookRotation(transform.forward, forward), Vector3.one * b.Data.Length * b.WorldScaleX));
+			Graphics.DrawMeshNow(SpineEditorUtilities.Icons.boneMesh, Matrix4x4.TRS(vec, Quaternion.LookRotation(transform.forward, forward), transform.lossyScale * b.Data.Length * b.WorldScaleX));
 		}
 	}
 

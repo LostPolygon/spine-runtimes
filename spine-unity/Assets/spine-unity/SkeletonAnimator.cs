@@ -13,7 +13,9 @@ using Spine;
 public class SkeletonAnimator : SkeletonRenderer, ISkeletonAnimation {
 
 	public enum MixMode { AlwaysMix, MixNext, SpineStyle }
+	public enum SteppedMixMode { Default, Instant }
 	public MixMode[] layerMixModes = new MixMode[0];
+	public SteppedMixMode[] layerSteppedMixModes = new SteppedMixMode[0];
 
 	public event UpdateBonesDelegate UpdateLocal {
 		add { _UpdateLocal += value; }
@@ -71,6 +73,10 @@ public class SkeletonAnimator : SkeletonRenderer, ISkeletonAnimation {
 		if (layerMixModes.Length != animator.layerCount) {
 			System.Array.Resize<MixMode>(ref layerMixModes, animator.layerCount);
 		}
+
+		if (layerSteppedMixModes.Length != animator.layerCount) {
+			System.Array.Resize<SteppedMixMode>(ref layerSteppedMixModes, animator.layerCount);
+		}
 		float deltaTime = Time.time - lastTime;
 
 		skeleton.Update(Time.deltaTime);
@@ -95,6 +101,7 @@ public class SkeletonAnimator : SkeletonRenderer, ISkeletonAnimation {
 			var nextClipInfo = animator.GetNextAnimationClipState(i);
 #endif
 			MixMode mode = layerMixModes[i];
+			SteppedMixMode steppedMode = layerSteppedMixModes[i];
 
 			if (mode == MixMode.AlwaysMix) {
 				//always use Mix instead of Applying the first non-zero weighted clip
@@ -104,8 +111,7 @@ public class SkeletonAnimator : SkeletonRenderer, ISkeletonAnimation {
 					if (weight == 0)
 						continue;
 
-					float time = stateInfo.normalizedTime * info.clip.length;
-					animationTable[GetAnimationClipNameHashCode(info.clip)].Mix(skeleton, Mathf.Max(0, time - deltaTime), time, stateInfo.loop, null, weight);
+					MixAnimation(stateInfo, info, steppedMode, deltaTime, weight);
 				}
 
 				if (nextStateInfo.fullPathHash != 0) {
@@ -115,8 +121,7 @@ public class SkeletonAnimator : SkeletonRenderer, ISkeletonAnimation {
 						if (weight == 0)
 							continue;
 
-						float time = nextStateInfo.normalizedTime * info.clip.length;
-						animationTable[GetAnimationClipNameHashCode(info.clip)].Mix(skeleton, Mathf.Max(0, time - deltaTime), time, nextStateInfo.loop, null, weight);
+						MixAnimation(nextStateInfo, info, steppedMode, deltaTime, weight);
 					}
 				}
 			} else if (mode >= MixMode.MixNext) {
@@ -130,7 +135,7 @@ public class SkeletonAnimator : SkeletonRenderer, ISkeletonAnimation {
 						continue;
 
 					float time = stateInfo.normalizedTime * info.clip.length;
-					animationTable[GetAnimationClipNameHashCode(info.clip)].Apply(skeleton, Mathf.Max(0, time - deltaTime), time, stateInfo.loop, null);
+					GetAnimation(info.clip).Apply(skeleton, Mathf.Max(0, time - deltaTime), time, stateInfo.loop, null);
 					break;
 				}
 
@@ -142,7 +147,7 @@ public class SkeletonAnimator : SkeletonRenderer, ISkeletonAnimation {
 						continue;
 
 					float time = stateInfo.normalizedTime * info.clip.length;
-					animationTable[GetAnimationClipNameHashCode(info.clip)].Mix(skeleton, Mathf.Max(0, time - deltaTime), time, stateInfo.loop, null, weight);
+					GetAnimation(info.clip).Mix(skeleton, Mathf.Max(0, time - deltaTime), time, stateInfo.loop, null, weight);
 				}
 
 				c = 0;
@@ -157,7 +162,7 @@ public class SkeletonAnimator : SkeletonRenderer, ISkeletonAnimation {
 								continue;
 
 							float time = nextStateInfo.normalizedTime * info.clip.length;
-							animationTable[GetAnimationClipNameHashCode(info.clip)].Apply(skeleton, Mathf.Max(0, time - deltaTime), time, nextStateInfo.loop, null);
+							GetAnimation(info.clip).Apply(skeleton, Mathf.Max(0, time - deltaTime), time, nextStateInfo.loop, null);
 							break;
 						}
 					}
@@ -191,6 +196,26 @@ public class SkeletonAnimator : SkeletonRenderer, ISkeletonAnimation {
 		}
 
 		lastTime = Time.time;
+	}
+
+	private void MixAnimation(AnimatorStateInfo stateInfo, AnimatorClipInfo clipInfo, SteppedMixMode steppedMode, float deltaTime, float weight) {
+		float time = stateInfo.normalizedTime * clipInfo.clip.length;
+		switch (steppedMode) {
+			case SteppedMixMode.Default:
+				GetAnimation(clipInfo.clip).Mix(skeleton, Mathf.Max(0, time - deltaTime), time, stateInfo.loop, null, weight);
+				break;
+			case SteppedMixMode.Instant:
+				GetAnimation(clipInfo.clip).MixWithInstantStepped(skeleton, Mathf.Max(0, time - deltaTime), time, stateInfo.loop, null, weight);
+				break;
+		}
+	}
+
+	private Spine.Animation GetAnimation (AnimationClip clip) {
+		Spine.Animation spineAnimation;
+		if (!animationTable.TryGetValue(GetAnimationClipNameHashCode(clip), out spineAnimation))
+			throw new KeyNotFoundException(string.Format("No animation found for clip '{0}'", clip.name));
+
+		return spineAnimation;
 	}
 
 	private int GetAnimationClipNameHashCode (AnimationClip clip) {

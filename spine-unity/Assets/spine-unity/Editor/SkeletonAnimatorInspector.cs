@@ -12,10 +12,12 @@ using Spine;
 [CustomEditor(typeof(SkeletonAnimator))]
 public class SkeletonAnimatorInspector : SkeletonRendererInspector {
 	protected SerializedProperty layerMixModes;
+	protected SerializedProperty layerSteppedMixModes;
 	protected bool isPrefab;
 	protected override void OnEnable () {
 		base.OnEnable();
 		layerMixModes = serializedObject.FindProperty("layerMixModes");
+		layerSteppedMixModes = serializedObject.FindProperty("layerSteppedMixModes");
 
 		if (PrefabUtility.GetPrefabType(this.target) == PrefabType.Prefab)
 			isPrefab = true;
@@ -25,6 +27,7 @@ public class SkeletonAnimatorInspector : SkeletonRendererInspector {
 		base.gui();
 
 		EditorGUILayout.PropertyField(layerMixModes, true);
+		EditorGUILayout.PropertyField(layerSteppedMixModes, true);
 
 		SkeletonAnimator component = (SkeletonAnimator)target;
 		if (!component.valid)
